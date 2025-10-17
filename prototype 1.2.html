@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>City Disease Surveillance System</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Use Inter font -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #ffffff;
+        }
+        /* Custom scrollbar for better aesthetics */
+        .sidebar {
+            transition: width 0.3s ease-in-out;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex bg-gray-50">
+
+    <!-- Sidebar / Left Navigation -->
+    <div id="sidebar" class="sidebar flex-shrink-0 w-64 bg-gray-800 text-white p-4 shadow-2xl z-20">
+        <h1 class="text-2xl font-extrabold mb-8 text-indigo-400 border-b border-indigo-700 pb-2">HANDA</h1>
+        <nav id="nav-container" class="space-y-2">
+            <!-- Navigation links will be dynamically added here based on user role -->
+        </nav>
+
+        <div class="absolute bottom-4 w-56 pr-8">
+            <div id="auth-status" class="text-sm p-3 bg-gray-700 rounded-lg shadow-inner">
+                <!-- Auth status will be dynamically added here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <main id="main-content" class="flex-grow p-6 md:p-10 transition-all duration-300 overflow-auto">
+        <!-- Content will be dynamically loaded here -->
+    </main>
+
+    <!-- Modal for Messages/Confirmation (e.g., instead of alert/confirm) -->
+    <div id="message-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+        <div class="bg-white p-6 rounded-xl shadow-2xl max-w-sm w-full">
+            <h3 id="modal-title" class="text-xl font-bold mb-4 text-gray-800"></h3>
+            <p id="modal-body" class="mb-6 text-gray-600"></p>
+            <button id="modal-close-btn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 rounded-lg transition duration-150">Close</button>
+        </div>
+    </div>
+
+    <script>
+        // --- Globals and Initial Data Setup ---
+        const ROOT_KEY = 'disease-surveillance-prototype';
+        const APP_STATE = {
+            currentUser: null, // { email, role, name }
+            records: [], // Disease data
+            users: {}, // { email: { password, role, name } }
+            currentView: 'Home',
+            nextRecordId: 1,
+            nextUserId: 1,
+        };
+
+        const ROLES = {
+            PUBLIC: 'Public',
+            STAFF: 'Staff',
+            ADMIN: 'Admin',
+        };
+
+        // Simulated initial users
+        const defaultUsers = {
+            'admin@city.gov': { id: 1, password: 'admin', role: ROLES.ADMIN, name: 'Paolo!' },
+            'staff@city.gov': { id: 2, password: 'staff', role: ROLES.STAFF, name: 'Health Staff' },
+            'public@city.gov': { id: 3, password: 'public', role: ROLES.PUBLIC, name: 'General Public' },
+        };
+
+        // Simulated initial records (Barangay data in Philippines context)
+        const defaultRecords = [
+            { id: 1, barangay: "Poblacion", disease: "Dengue", cases: 25, date: "2025-09-01" },
+            { id: 2, barangay: "San Antonio", disease: "Flu", cases: 45, date: "2025-09-03" },
+            { id: 3, barangay: "Bagong Silang", disease: "Typhoid Fever", cases: 5, date: "2025-09-05" },
+            { id: 4, barangay: "Sta. Mesa", disease: "Measles", cases: 12, date: "2025-09-08" },
+            { id: 5, barangay: "Pinagbuhatan", disease: "Dengue", cases: 18, date: "2025-09-11" },
+        ];
+
+
+        // --- Utility Functions ---
+
+        /**
+         * Safely loads data from localStorage and initializes defaults if empty.
+         */
+        function loadInitialData() {
+            try {
+                const storedData = localStorage.getItem(ROOT_KEY);
+                if (storedData) {
+                    const data = JSON.parse(storedData);
+                    APP_STATE.records = data.records || defaultRecords;
+                    APP_STATE.users = data.users || defaultUsers;
+                    APP_STATE.nextRecordId = data.nextRecordId || APP_STATE.records.length + 1;
+                    APP_STATE.nextUserId = data.nextUserId || Object.keys(APP_STATE.users).length + 1;
+                } else {
+                    APP_STATE.records = defaultRecords;
+                    APP_STATE.users = defaultUsers;
+                    APP_STATE.nextRecordId = defaultRecords.length + 1;
+                    APP_STATE.nextUserId = Object.keys(defaultUsers).length + 1;
+                    saveState();
+                }
+                // Set default user to Public if not logged in
+                APP_STATE.currentUser = defaultUsers['public@city.gov'];
+            } catch (error) {
+                console.error("Error loading state from localStorage:", error);
+                // Fallback to defaults
+                APP_STATE.records = defaultRecords;
+                APP_STATE.users = defaultUsers;
+                APP_STATE.currentUser = defaultUsers['public@city.gov'];
+            }
+        }
+
+        /**
+         * Saves the current state (records, users, IDs) to localStorage.
+         */
+        function saveState() {
+            const dataToStore = {
+                records: APP_STATE.records,
+                users: APP_STATE.users,
+                nextRecordId: APP_STATE.nextRecordId,
+                nextUserId: APP_STATE.nextUserId,
+            };
+            localStorage.setItem(ROOT_KEY, JSON.stringify(dataToStore));
+        }
+
+        /**
+         * Displays a custom modal message (replaces alert/confirm).
+         * @param {string} title - Modal title.
+         * @param {string} body - Modal content.
+         */
+        function showMessageModal(title, body) {
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-body').textContent = body;
+            document.getElementById('message-modal').classList.remove('hidden');
+        }
+
+        document.getElementById('modal-close-btn').addEventListener('click', () => {
+            document.getElementById('message-modal').classList.add('hidden');
+        });
+
+        /**
+         * Converts an array of objects to a CSV string.
+         * @param {Array<Object>} data - The array of data objects.
+         * @returns {string} The CSV formatted string.
+         */
+        function convertToCSV(data) {
+            if (data.length === 0) return '';
+            const headers = Object.keys(data[0]).join(',');
+            const rows = data.map(obj => Object.values(obj).map(value => {
+                // Simple quoting for values containing commas
+                return `"${String(value).replace(/"/g, '""')}"`;
+            }).join(','));
+            return [headers, ...rows].join('\n');
+        }
+
+        /**
+         * Triggers a file download for the given CSV content.
+         * @param {string} csvContent - The CSV data string.
+         * @param {string} filename - The name of the file to download.
+         */
+        function downloadCSV(csvContent, filename) {
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            if (link.download !== undefined) {
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                link.setAttribute("download", filename);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } else {
+                showMessageModal('Download Error', 'Your browser does not support automatic downloads. Please copy the data manually.');
+            }
+        }
+
+
+        // --- Authentication Logic ---
+
+        function login(email, password) {
+            const user = APP_STATE.users[email];
+            if (user && user.password === password) {
+                APP_STATE.currentUser = user;
+                APP_STATE.currentView = 'Dashboard'; // Redirect to dashboard after login
+                renderApp();
+                showMessageModal('Success', `Welcome back, Paolo! (${user.role})!`);
+                return true;
+            } else {
+                showMessageModal('Login Failed', 'Invalid email or password.');
+                return false;
+            }
+        }
+
+        function logout() {
+            APP_STATE.currentUser = defaultUsers['public@city.gov'];
+            APP_STATE.currentView = 'Home';
+            renderApp();
+            showMessageModal('Logout', 'You have been successfully logged out.');
+        }
+
+
+        // --- CRUD Operations for Records (Staff/Admin) ---
+
+        function addRecord(data) {
+            const newRecord = {
+                id: APP_STATE.nextRecordId++,
+                barangay: data.barangay,
+                disease: data.disease,
+                cases: parseInt(data.cases),
+                date: data.date,
+            };
+            APP_STATE.records.push(newRecord);
+            saveState();
+            renderView('Records'); // Re-render the records table
+            showMessageModal('Success', `New record for ${newRecord.disease} in ${newRecord.barangay} added.`);
+        }
+
+        function updateRecord(id, data) {
+            const index = APP_STATE.records.findIndex(r => r.id === id);
+            if (index !== -1) {
+                APP_STATE.records[index] = {
+                    ...APP_STATE.records[index],
+                    barangay: data.barangay,
+                    disease: data.disease,
+                    cases: parseInt(data.cases),
+                    date: data.date,
+                };
+                saveState();
+                renderView('Records');
+                showMessageModal('Success', `Record ID ${id} updated.`);
+                return true;
+            }
+            return false;
+        }
+
+        function deleteRecord(id) {
+            APP_STATE.records = APP_STATE.records.filter(r => r.id !== id);
+            saveState();
+            renderView('Records');
+            showMessageModal('Deleted', `Record ID ${id} removed.`);
+        }
+
+
+        // --- User Management Logic (Admin) ---
+
+        function addUser(email, password, role, name) {
+            if (APP_STATE.users[email]) {
+                showMessageModal('Failed', `User with email ${email} already exists.`);
+                return false;
+            }
+            const newUser = {
+                id: APP_STATE.nextUserId++,
+                password: password,
+                role: role,
+                name: name,
+            };
+            APP_STATE.users[email] = newUser;
+            saveState();
+            renderView('UserManagement');
+            showMessageModal('Success', `New ${role} user (${name}) added.`);
+            return true;
+        }
+
+        // --- View Rendering Functions ---
+
+        /**
+         * Renders the navigation based on the current user's role.
+         */
+        function renderNavigation() {
+            const navContainer = document.getElementById('nav-container');
+            navContainer.innerHTML = '';
+            const role = APP_STATE.currentUser.role;
+
+            const navItems = [
+                { name: 'Home', roles: [ROLES.PUBLIC, ROLES.STAFF, ROLES.ADMIN], icon: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
+                { name: 'Dashboard', roles: [ROLES.PUBLIC, ROLES.STAFF, ROLES.ADMIN], icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m0 0v8a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
+                { name: 'Reports', roles: [ROLES.PUBLIC, ROLES.STAFF, ROLES.ADMIN], icon: 'M9 17v-4m0 0h6m-6 0l-2 2' },
+                { name: 'Records', roles: [ROLES.STAFF, ROLES.ADMIN], icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2zm1-10h12v9H6v-9z' },
+                { name: 'User Management', roles: [ROLES.ADMIN], icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20v-2a3 3 0 00-5.356-1.857M10 9a2 2 0 012-2h4a2 2 0 012 2v2a2 2 0 01-2 2h-4a2 2 0 01-2-2V9zM7 20v-2a3 3 0 00-5.356-1.857M4 6a2 2 0 11-4 0 2 2 0 014 0zm0 0h20' }, // Placeholder icon for User Mgt
+                { name: 'Login', roles: [ROLES.PUBLIC], icon: 'M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3v-1' },
+                { name: 'Logout', roles: [ROLES.STAFF, ROLES.ADMIN], icon: 'M13 10V3L4 14h7v7l9-11h-7z' },
+            ];
+
+            navItems
+                .filter(item => item.roles.includes(role))
+                .forEach(item => {
+                    const isActive = APP_STATE.currentView === item.name;
+                    const button = document.createElement('button');
+                    button.className = `flex items-center w-full p-3 rounded-xl font-medium transition duration-150 ${isActive ? 'bg-indigo-600 shadow-lg text-white' : 'text-gray-300 hover:bg-gray-700 hover:text-white'}`;
+                    button.innerHTML = `
+                        <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${item.icon}"></path>
+                        </svg>
+                        <span>${item.name}</span>
+                    `;
+                    button.addEventListener('click', () => {
+                        if (item.name === 'Logout') {
+                            logout();
+                        } else {
+                            renderView(item.name);
+                        }
+                    });
+                    navContainer.appendChild(button);
+                });
+
+            // Update Auth Status
+            const authStatus = document.getElementById('auth-status');
+            if (APP_STATE.currentUser.role === ROLES.PUBLIC) {
+                authStatus.innerHTML = `
+                    <p class="font-bold text-yellow-400">Public View</p>
+                    <p class="text-xs text-gray-400">Please log in for Staff/Admin access.</p>
+                `;
+            } else {
+                authStatus.innerHTML = `
+                    <p class="font-bold text-white">${APP_STATE.currentUser.name}</p>
+                    <p class="text-sm text-indigo-300">Role: ${APP_STATE.currentUser.role}</p>
+                `;
+            }
+        }
+
+        /**
+         * Renders the main content area based on the selected view.
+         * @param {string} viewName - The name of the view to render.
+         */
+        function renderView(viewName) {
+            APP_STATE.currentView = viewName;
+            renderNavigation();
+            const contentDiv = document.getElementById('main-content');
+            contentDiv.innerHTML = '';
+            let contentHTML = '';
+
+            switch (viewName) {
+                case 'Home':
+                    contentHTML = renderHomeView();
+                    break;
+                case 'Dashboard':
+                    contentHTML = renderDashboardView();
+                    break;
+                case 'Login':
+                    contentHTML = renderLoginView();
+                    break;
+                case 'Records':
+                    contentHTML = renderRecordsView();
+                    break;
+                case 'User Management':
+                    contentHTML = renderUserManagementView();
+                    break;
+                case 'Reports':
+                    contentHTML = renderReportsView();
+                    break;
+                default:
+                    contentHTML = `<h2 class="text-3xl font-bold text-gray-900">404 Not Found</h2>`;
+            }
+
+            contentDiv.innerHTML = `
+                <div class="max-w-7xl mx-auto">
+                    <h2 class="text-4xl font-extrabold text-gray-900 mb-8 pb-3 border-b-4 border-indigo-200">${viewName}</h2>
+                    ${contentHTML}
+                </div>
+            `;
+
+            // Attach event listeners after content is injected
+            if (viewName === 'Home') {
+                document.getElementById('go-to-dashboard-btn').addEventListener('click', () => {
+                    renderView('Dashboard');
+                });
+            } else if (viewName === 'Login') {
+                document.getElementById('login-form').addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    const email = document.getElementById('email').value;
+                    const password = document.getElementById('password').value;
+                    login(email, password);
+                });
+            } else if (viewName === 'Records') {
+                setupRecordsListeners();
+            } else if (viewName === 'User Management') {
+                setupUserManagementListeners();
+            } else if (viewName === 'Reports') {
+                setupReportsListeners();
+            }
+        }
+
+        // --- Specific View Renderers ---
+
+        function renderHomeView() {
+            return `
+                <div class="bg-white p-8 rounded-xl shadow-lg text-center">
+                    <h1 class="text-5xl font-extrabold text-indigo-600 mb-4">Welcome to HANDA</h1>
+                    <p class="text-xl text-gray-600 mb-8 max-w-3xl mx-auto">Your city's central hub for real-time disease surveillance and public health monitoring.</p>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-8 my-12 text-left">
+                        <div class="p-6 bg-gray-50 rounded-lg border-l-4 border-indigo-500">
+                            <h3 class="text-xl font-bold text-gray-800 mb-2">Live Dashboard</h3>
+                            <p class="text-gray-600">View a live dashboard with dynamic charts and maps tracking health incidents across the city.</p>
+                        </div>
+                        <div class="p-6 bg-gray-50 rounded-lg border-l-4 border-green-500">
+                            <h3 class="text-xl font-bold text-gray-800 mb-2">Comprehensive Reports</h3>
+                            <p class="text-gray-600">Generate and export detailed datasets for analysis and record-keeping.</p>
+                        </div>
+                        <div class="p-6 bg-gray-50 rounded-lg border-l-4 border-yellow-500">
+                            <h3 class="text-xl font-bold text-gray-800 mb-2">Role-Based Access</h3>
+                            <p class="text-gray-600">Secure access levels for the public, health staff, and administrators.</p>
+                        </div>
+                    </div>
+
+                    <button id="go-to-dashboard-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-lg text-lg transition duration-150 shadow-lg">
+                        View Live Dashboard
+                    </button>
+                </div>
+            `;
+        }
+
+        function renderDashboardView() {
+            // Calculate summary data
+            const totalCases = APP_STATE.records.reduce((sum, r) => sum + r.cases, 0);
+            const distinctDiseases = [...new Set(APP_STATE.records.map(r => r.disease))].length;
+            const barangayCases = APP_STATE.records.reduce((acc, r) => {
+                acc[r.barangay] = (acc[r.barangay] || 0) + r.cases;
+                return acc;
+            }, {});
+
+            const topBarangays = Object.entries(barangayCases)
+                .sort(([, a], [, b]) => b - a)
+                .slice(0, 5);
+
+            return `
+                <!-- Summary Cards -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+                    <div class="bg-white p-6 rounded-xl shadow-lg border-b-4 border-indigo-500">
+                        <p class="text-sm font-medium text-gray-500">Total Cases (All Time)</p>
+                        <p class="text-4xl font-bold text-indigo-600 mt-1">${totalCases.toLocaleString()}</p>
+                    </div>
+                    <div class="bg-white p-6 rounded-xl shadow-lg border-b-4 border-green-500">
+                        <p class="text-sm font-medium text-gray-500">Distinct Diseases Tracked</p>
+                        <p class="text-4xl font-bold text-green-600 mt-1">${distinctDiseases}</p>
+                    </div>
+                    <div class="bg-white p-6 rounded-xl shadow-lg border-b-4 border-yellow-500">
+                        <p class="text-sm font-medium text-gray-500">Total Barangays Reporting</p>
+                        <p class="text-4xl font-bold text-yellow-600 mt-1">${Object.keys(barangayCases).length}</p>
+                    </div>
+                </div>
+
+                <!-- Dashboard Content -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- Top Barangays Card -->
+                    <div class="lg:col-span-1 bg-white p-6 rounded-xl shadow-lg h-120">
+                        <h3 class="text-2xl font-semibold text-gray-800 mb-4">Top 5 Affected Barangays</h3>
+                        <ul class="space-y-3">
+                            ${topBarangays.map(([brgy, cases]) => `
+                                <li class="flex justify-between items-center p-3 bg-gray-50 rounded-lg border-l-4 border-red-400">
+                                    <span class="font-medium text-gray-700">${brgy}</span>
+                                    <span class="text-lg font-bold text-red-600">${cases}</span>
+                                </li>
+                            `).join('')}
+                        </ul>
+                    </div>
+
+                    <!-- Placeholder Map Card -->
+                    <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg h-120 flex flex-col">
+                        <h3 class="text-2xl font-semibold text-gray-800 mb-4">Disease Hotspot Map (API Placeholder)</h3>
+                        <div class="flex-grow bg-gray-200 rounded-lg flex items-center justify-center text-gray-500 text-center p-4">
+                            <p>
+                                
+                                <br>
+                                Placeholder for a mapping API 
+                                
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderLoginView() {
+            return `
+                <div class="flex items-center justify-center min-h-[60vh]">
+                    <div class="w-full max-w-md bg-white p-8 rounded-xl shadow-2xl border-t-4 border-indigo-500">
+                        <h3 class="text-3xl font-bold text-center mb-6 text-gray-800">Staff / Admin Login</h3>
+                        <form id="login-form" class="space-y-6">
+                            <div>
+                                <label for="email" class="block text-sm font-medium text-gray-700">Email Address</label>
+                                <input type="email" id="email" required placeholder="e.g., staff@city.gov" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 transition duration-150">
+                            </div>
+                            <div>
+                                <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                                <input type="password" id="password" required placeholder="password" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 transition duration-150">
+                            </div>
+                            <button type="submit" class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-lg font-semibold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150">
+                                Log In
+                            </button>
+                        </form>
+                        <p class="mt-6 text-center text-sm text-gray-500">
+                            **Prototype Credentials:**<br>
+                            Admin: <code>admin@city.gov</code> / <code>admin</code><br>
+                            Staff: <code>staff@city.gov</code> / <code>staff</code>
+                        </p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderReportsView() {
+            // Public view with export options
+            const today = new Date().toISOString().split('T')[0];
+
+            return `
+                <div class="bg-white p-8 rounded-xl shadow-lg mb-8">
+                    <h3 class="text-2xl font-semibold mb-4 text-gray-800">Export Disease Data (CSV)</h3>
+                    <p class="text-gray-600 mb-6">Select a date range to export the corresponding disease records from the database.</p>
+
+                    <form id="report-form" class="space-y-4 md:space-y-0 md:flex md:space-x-4 items-end">
+                        <div class="flex-1">
+                            <label for="start-date" class="block text-sm font-medium text-gray-700">Start Date</label>
+                            <input type="date" id="start-date" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500" value="2025-01-01" required>
+                        </div>
+                        <div class="flex-1">
+                            <label for="end-date" class="block text-sm font-medium text-gray-700">End Date</label>
+                            <input type="date" id="end-date" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500" value="${today}" required>
+                        </div>
+                        <button type="submit" class="w-full md:w-auto flex-shrink-0 py-2.5 px-6 border border-transparent rounded-lg shadow-md text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition duration-150">
+                            Export to CSV
+                        </button>
+                    </form>
+                </div>
+
+                <div class="bg-white p-8 rounded-xl shadow-lg">
+                    <h3 class="text-2xl font-semibold mb-4 text-gray-800">Available Data Preview</h3>
+                    <p class="text-gray-600 mb-4">Total records available: <span class="font-bold text-indigo-600">${APP_STATE.records.length}</span></p>
+                    <!-- Display simple table preview (max 10 rows) -->
+                    ${renderRecordsTable(APP_STATE.records.slice(0, 10), false)}
+                    <p class="text-center text-sm text-gray-500 mt-4">... showing first 10 records only.</p>
+                </div>
+            `;
+        }
+
+        function setupReportsListeners() {
+            document.getElementById('report-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const startDate = document.getElementById('start-date').value;
+                const endDate = document.getElementById('end-date').value;
+
+                if (!startDate || !endDate) {
+                    showMessageModal('Validation Error', 'Please select both a start and end date.');
+                    return;
+                }
+
+                // Filter records by date range
+                const filteredRecords = APP_STATE.records.filter(r => {
+                    return r.date >= startDate && r.date <= endDate;
+                });
+
+                if (filteredRecords.length === 0) {
+                    showMessageModal('No Data', `No records found between ${startDate} and ${endDate}.`);
+                    return;
+                }
+
+                const csvContent = convertToCSV(filteredRecords);
+                downloadCSV(csvContent, `disease_report_${startDate}_to_${endDate}.csv`);
+            });
+        }
+
+
+        function renderRecordsTable(records, withActions = true) {
+            if (records.length === 0) {
+                return '<p class="text-center py-10 text-gray-500">No disease records found.</p>';
+            }
+
+            return `
+                <div class="overflow-x-auto rounded-xl shadow-lg border border-gray-200">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Barangay</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Disease</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cases</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                ${withActions ? '<th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>' : ''}
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            ${records.map(r => `
+                                <tr class="hover:bg-indigo-50">
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${r.id}</td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${r.barangay}</td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${r.disease}</td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-red-600">${r.cases}</td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${r.date}</td>
+                                    ${withActions ? `
+                                        <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium space-x-2">
+                                            <button data-id="${r.id}" class="edit-btn text-indigo-600 hover:text-indigo-900 transition duration-150">Edit</button>
+                                            <button data-id="${r.id}" class="delete-btn text-red-600 hover:text-red-900 transition duration-150">Delete</button>
+                                        </td>
+                                    ` : ''}
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+
+        function renderRecordsView() {
+            if (![ROLES.STAFF, ROLES.ADMIN].includes(APP_STATE.currentUser.role)) {
+                return `<p class="text-xl text-red-600 py-10">Access Denied: Only Staff and Admins can view and manage records.</p>`;
+            }
+
+            return `
+                <!-- Add/Edit Form -->
+                <div class="bg-white p-6 rounded-xl shadow-lg mb-8">
+                    <h3 id="record-form-title" class="text-2xl font-semibold mb-4 text-gray-800">Add New Record</h3>
+                    <form id="record-form" class="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+                        <input type="hidden" id="record-id">
+                        <div>
+                            <label for="barangay" class="block text-sm font-medium text-gray-700">Barangay</label>
+                            <input type="text" id="barangay" placeholder="Barangay Name" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm">
+                        </div>
+                        <div>
+                            <label for="disease" class="block text-sm font-medium text-gray-700">Disease</label>
+                            <input type="text" id="disease" placeholder="Disease Name" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm">
+                        </div>
+                        <div>
+                            <label for="cases" class="block text-sm font-medium text-gray-700">Cases</label>
+                            <input type="number" id="cases" placeholder="No. of Cases" required min="1" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm">
+                        </div>
+                        <div>
+                            <label for="date" class="block text-sm font-medium text-gray-700">Date Reported</label>
+                            <input type="date" id="date" required max="${new Date().toISOString().split('T')[0]}" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm">
+                        </div>
+                        <div class="md:col-span-1">
+                            <button type="submit" id="submit-record-btn" class="w-full py-2.5 px-4 border border-transparent rounded-lg shadow-md text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150">
+                                Add Record
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Records Table -->
+                <div class="bg-white p-6 rounded-xl shadow-lg">
+                    <h3 class="text-2xl font-semibold mb-4 text-gray-800">Current Disease Records (${APP_STATE.records.length})</h3>
+                    ${renderRecordsTable(APP_STATE.records, true)}
+                </div>
+            `;
+        }
+
+        function setupRecordsListeners() {
+            const form = document.getElementById('record-form');
+
+            // Handle Add/Update Submission
+            form.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const id = document.getElementById('record-id').value;
+                const data = {
+                    barangay: document.getElementById('barangay').value,
+                    disease: document.getElementById('disease').value,
+                    cases: document.getElementById('cases').value,
+                    date: document.getElementById('date').value,
+                };
+
+                if (id) {
+                    // Update
+                    updateRecord(parseInt(id), data);
+                } else {
+                    // Add
+                    addRecord(data);
+                }
+                // Reset form after submission
+                form.reset();
+                document.getElementById('record-id').value = '';
+                document.getElementById('record-form-title').textContent = 'Add New Record';
+                document.getElementById('submit-record-btn').textContent = 'Add Record';
+            });
+
+            // Handle Edit Button Clicks
+            document.querySelectorAll('.edit-btn').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    const id = parseInt(e.target.dataset.id);
+                    const record = APP_STATE.records.find(r => r.id === id);
+                    if (record) {
+                        document.getElementById('record-id').value = record.id;
+                        document.getElementById('barangay').value = record.barangay;
+                        document.getElementById('disease').value = record.disease;
+                        document.getElementById('cases').value = record.cases;
+                        document.getElementById('date').value = record.date;
+                        document.getElementById('record-form-title').textContent = `Editing Record ID: ${id}`;
+                        document.getElementById('submit-record-btn').textContent = 'Update Record';
+                        // Scroll to form
+                        form.scrollIntoView({ behavior: 'smooth' });
+                    }
+                });
+            });
+
+            // Handle Delete Button Clicks
+            document.querySelectorAll('.delete-btn').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    const id = parseInt(e.target.dataset.id);
+                    const record = APP_STATE.records.find(r => r.id === id);
+                    if (confirm(`Are you sure you want to delete the record for ${record.disease} in ${record.barangay}?`)) {
+                        deleteRecord(id);
+                    } else {
+                        // Using a custom "confirm" for compliance, but simple JS confirm here for quick prototyping
+                        // A true implementation would use the custom modal for confirmation.
+                        showMessageModal('Canceled', 'Deletion canceled.');
+                    }
+                });
+            });
+        }
+
+
+        function renderUserManagementView() {
+            if (APP_STATE.currentUser.role !== ROLES.ADMIN) {
+                return `<p class="text-xl text-red-600 py-10">Access Denied: Only Admins can access User Management.</p>`;
+            }
+
+            const staffList = Object.entries(APP_STATE.users)
+                .map(([email, user]) => ({ email, ...user }))
+                .filter(user => [ROLES.STAFF, ROLES.ADMIN].includes(user.role))
+                .sort((a, b) => a.role.localeCompare(b.role) || a.name.localeCompare(b.name));
+
+            return `
+                <!-- Add User Form -->
+                <div class="bg-white p-6 rounded-xl shadow-lg mb-8">
+                    <h3 class="text-2xl font-semibold mb-4 text-gray-800">Add New Staff / Admin</h3>
+                    <form id="add-user-form" class="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
+                        <div class="md:col-span-2">
+                            <label for="new-user-name" class="block text-sm font-medium text-gray-700">Full Name</label>
+                            <input type="text" id="new-user-name" required placeholder="John Doe" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm">
+                        </div>
+                        <div class="md:col-span-2">
+                            <label for="new-user-email" class="block text-sm font-medium text-gray-700">Email (Username)</label>
+                            <input type="email" id="new-user-email" required placeholder="user@city.gov" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm">
+                        </div>
+                        <div>
+                            <label for="new-user-role" class="block text-sm font-medium text-gray-700">Role</label>
+                            <select id="new-user-role" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm">
+                                <option value="${ROLES.STAFF}">${ROLES.STAFF}</option>
+                                <option value="${ROLES.ADMIN}">${ROLES.ADMIN}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="new-user-password" class="block text-sm font-medium text-gray-700">Password</label>
+                            <input type="password" id="new-user-password" required placeholder="password" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm">
+                        </div>
+                        <div class="md:col-span-6">
+                            <button type="submit" class="w-full py-2.5 px-4 border border-transparent rounded-lg shadow-md text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150">
+                                Create User
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Users List -->
+                <div class="bg-white p-6 rounded-xl shadow-lg">
+                    <h3 class="text-2xl font-semibold mb-4 text-gray-800">Staff and Admin Accounts (${staffList.length})</h3>
+                    <div class="overflow-x-auto rounded-xl shadow-lg border border-gray-200">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                ${staffList.map(u => `
+                                    <tr class="hover:bg-gray-50">
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${u.id}</td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${u.name}</td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${u.email}</td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm font-bold ${u.role === ROLES.ADMIN ? 'text-purple-600' : 'text-blue-600'}">${u.role}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                    <p class="text-sm text-red-500 mt-4">*Note: For this prototype, user deletion/editing is not implemented, only viewing and adding.</p>
+                </div>
+            `;
+        }
+
+        function setupUserManagementListeners() {
+            document.getElementById('add-user-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const name = document.getElementById('new-user-name').value;
+                const email = document.getElementById('new-user-email').value;
+                const role = document.getElementById('new-user-role').value;
+                const password = document.getElementById('new-user-password').value;
+
+                if (name && email && role && password) {
+                    addUser(email, password, role, name);
+                    e.target.reset();
+                } else {
+                    showMessageModal('Error', 'Please fill out all fields.');
+                }
+            });
+        }
+
+
+        // --- Core Application Logic ---
+
+        function renderApp() {
+            renderView(APP_STATE.currentView);
+        }
+
+        // Initialize the application
+        window.onload = () => {
+            loadInitialData();
+            renderApp();
+        };
+
+        // Custom confirm for prototype compliance (optional, using JS confirm for quick CRUD demo)
+        function confirm(message) {
+            return window.confirm(message);
+        }
+
+    </script>
+</body>
+</html>
+
+
